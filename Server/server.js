@@ -1,23 +1,29 @@
 const express = require('express');
+const cors = require('cors');
+const dotenv = require('dotenv');
+const path = require('path');
+
+dotenv.config();
+
 const sql = require('mssql');
 
 const app = express();
-const cors = require('cors');
+app.use(cors());
 app.use(express.json());
 
-app.use(cors());
-const port = 3000;
-
 const config = {
-    user: 'LEQUOCBAO',
+    user: 'VIAGS_FE',
     password: 'fsd',
     server: '172.168.5.14\\SQL2008', // địa chỉ server
-    database: 'LEQUOCBAO_TM229_A',
+    database: 'VIAGS_FE_SP229_A',
     options: {
         encrypt: false, // sử dụng mã hóa
         trustServerCertificate: true // chỉ nên dùng trong môi trường phát triển
     }
 };
+
+// Serve static files from the React app
+app.use(express.static(path.join(__dirname, '../fbo-app/build')));
 
 app.get('/api/data', async (req, res) => {
     try {
@@ -33,11 +39,53 @@ app.get('/api/data', async (req, res) => {
     }
 });
 
-app.listen(port, () => {
-    console.log(`API đang chạy tại http://localhost:${port}`);
+
+app.get('/api/getPdfInv', async (req, res) => {
+    try {
+        const pool = await sql.connect(config);
+        const id = req.query.id;
+
+        const result = await pool.request()
+            .query(`SELECT data as file_data FROM hoadon68_pdf WHERE hoadon68_id = '${id}'`); // Thay đổi câu truy vấn phù hợp
+
+        if (result.recordset.length > 0) {
+            const fileData = result.recordset[0].file_data;
+            res.setHeader('Content-Type', 'application/pdf');
+            res.send(fileData);
+        } else {
+            res.status(404).json({ error: 'File không tìm thấy' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Lỗi khi truy xuất dữ liệu' });
+    }
+});
+
+app.get('/api/getInvdata', async (req, res) => {
+    try {
+        // Kết nối đến cơ sở dữ liệu
+        await sql.connect(config);
+        const result = await sql.query`exec dbo.zrs_aits$Load$InvOutput '20210101', null, '', 1, 1`;
+
+        // Trả về dữ liệu dưới dạng JSON
+        res.json(result.recordset);
+    } catch (err) {
+        console.error('SQL error', err);
+        res.status(500).send('Lỗi khi truy cập cơ sở dữ liệu');
+    }
+});
+
+
+// Handle all other routes for React
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../fbo-app/build', 'index.html'));
 });
 
 const jwt = require('jsonwebtoken');
+
+const port = process.env.PORT || 5000;
+app.listen(port, () => {
+    console.log(`API đang chạy tại http://localhost:${port}`);
+});
 
 // Thay thế secret_key bằng khóa bí mật của bạn
 const secretKey = '9sdGxiqbAgyS31ktx+3Y3BpDh0';
@@ -66,28 +114,26 @@ function md5Encode(password) {
     return CryptoJS.MD5(password).toString(); // Mã hóa mật khẩu bằng MD5
 }
 
-// Hàm xử lý mật khẩu
 function processPassword(password, key) {
     let sMD5 = md5Encode(password);
-    
-    // Thay đổi thứ tự các ký tự theo yêu cầu
+
     const newMD5 = key.substring(key.length - 1, key.length) +
-                    sMD5.substring(1, sMD5.length - 1) +
-                    key.substring(0, 1);
+        sMD5.substring(1, sMD5.length - 1) +
+        key.substring(0, 1);
+
     return newMD5;
 }
 
-// Ví dụ khi người dùng đăng nhập
 app.post('/api/login', async (req, res) => {
-    const {username, password} = req.body;
+    const { username, password } = req.body;
 
-    try { 
+    try {
         await sql.connect(config);
-        
+
         const result = await sql.query`SELECT id, name, comment, password, keys FROM vsysuserinfo WHERE name = ${username}`;
-        
+
         if (result.recordset.length === 0) {
-            return res.status(401).json({message: 'Tài khoản không tồn tại!' });
+            return res.status(401).json({ message: 'Tài khoản không tồn tại!' });
         }
 
         const user = result.recordset[0]; // Lấy thông tin người dùng đầu tiên
@@ -97,9 +143,9 @@ app.post('/api/login', async (req, res) => {
 
         // Kiểm tra mật khẩu đã mã hóa
         if (processedPassword === user.password) {
-            return res.json({message: 'Đăng nhập thành công!', token: generateToken(user)});
+            return res.json({ message: 'Đăng nhập thành công!', token: generateToken(user), comment: user.comment});
         } else {
-            return res.status(401).json({message: 'Mật khẩu không chính xác!'});
+            return res.status(401).json({ message: 'Mật khẩu không chính xác!' });
         }
     } catch (err) {
         console.error('SQL error', err);
